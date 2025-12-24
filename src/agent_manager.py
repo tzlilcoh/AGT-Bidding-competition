@@ -15,8 +15,6 @@ import multiprocessing as mp
 from threading import Thread
 import queue
 
-from src.base_agent import BiddingAgent
-
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +48,7 @@ class AgentManager:
     def load_agent(self, file_path: str, team_id: str, 
                    valuation_vector: Dict[str, float],
                    budget: float, 
-                   opponent_teams: list) -> Optional[BiddingAgent]:
+                   opponent_teams: list) -> Optional[Any]:
         """
         Dynamically load and instantiate a team's bidding agent.
         
@@ -62,7 +60,7 @@ class AgentManager:
             opponent_teams: List of opponent team IDs in the same arena
         
         Returns:
-            Instantiated BiddingAgent or None if loading failed
+            Instantiated agent object or None if loading failed
         """
         try:
             logger.info(f"Loading agent for team {team_id} from {file_path}")
@@ -131,7 +129,7 @@ class AgentManager:
         
         return True
     
-    def _execute_bid_in_thread(self, agent: BiddingAgent, item_id: str, 
+    def _execute_bid_in_thread(self, agent: Any, item_id: str, 
                                result_queue: queue.Queue):
         """
         Execute bid in a separate thread.
@@ -147,7 +145,7 @@ class AgentManager:
         except Exception as e:
             result_queue.put(('error', str(e)))
     
-    def execute_bid_with_timeout(self, agent: BiddingAgent, item_id: str) -> tuple:
+    def execute_bid_with_timeout(self, agent: Any, item_id: str) -> tuple:
         """
         Execute agent's bidding function with timeout enforcement.
         
@@ -200,7 +198,7 @@ class AgentManager:
             logger.error(f"Team {agent.team_id}: Unexpected error in bid execution: {e}", exc_info=True)
             return 0.0, execution_time, f"Exception: {str(e)}"
     
-    def update_agent_after_round(self, agent: BiddingAgent, item_id: str, 
+    def update_agent_after_round(self, agent: Any, item_id: str, 
                                 winning_team: str, price_paid: float) -> bool:
         """
         Update agent with round results.
