@@ -66,6 +66,7 @@ class BiddingAgent:
 
         self.high_competition_count = 0  # Count of items sold for > 10
         self.likely_high_items_total = 6 # From game rules
+        self.price_history = []
         
         # TODO: Add your custom state variables here
         # Examples:
@@ -91,7 +92,8 @@ class BiddingAgent:
             self.opponent_wins[winning_team] = self.opponent_wins.get(winning_team, 0) + 1
         if price_paid > 9.5: # Threshold slightly below 10 to be safe
             self.high_competition_count += 1
-            
+        if price_paid > 0:
+            self.price_history.append(price_paid)
         return True
 
     def _update_available_budget(self, item_id: str, winning_team: str, 
@@ -204,6 +206,24 @@ class BiddingAgent:
             bid = min(bid, max_bid_this_round)
         
         return max(0, bid)
+    
+    def _history_based_bidding(self, item_id: str, value: float) -> float:
+        """
+        Bidding based on history of prices
+        """
+            # Learn from market
+        if self.price_history:
+            avg_price = np.mean(self.price_history)
+            
+            # If item value > average market price, it's competitive
+            if value > avg_price * 1.2:
+                bid = value * 0.85  # Competitive item
+            else:
+                bid = value * 0.6   # Less competitive
+        else:
+            bid = value * 0.7
+        
+        return min(bid, self.budget)
 
     def bidding_function(self, item_id: str) -> float:
         """
@@ -225,7 +245,7 @@ class BiddingAgent:
         # 3. GET BASELINE STRATEGY
         # Use your existing function to get a market-aware bid.
         # This handles the shading (0.9/0.7/0.5) and the 50% budget safety cap.
-        base_bid = self.strategic_bidding_function(item_id, my_valuation)
+        base_bid = self._history_based_bidding(item_id, my_valuation)
         
         # 4. APPLY CATEGORY INTELLIGENCE (The "Kicker")
         # Check if we can improve upon the base_bid using distribution knowledge.
@@ -238,21 +258,7 @@ class BiddingAgent:
         
         final_bid = base_bid
         
-        if is_high_value:
-            if competitive_items_left > 1:
-                # SCENARIO A: GLOBAL HIGH (Danger)
-                # This is likely a "High-for-Everyone" item.
-                # Your strategic function caps bids at 50% budget. This is risky here!
-                # We need to OVERRIDE the cap and bid Truthfully to ensure we win (or tax).
-                final_bid = my_valuation 
-                
-            else:
-                # SCENARIO B: LOCAL HIGH (Opportunity)
-                # The "Global Highs" are mostly gone. This is a "Lucky High" for me.
-                # Your strategic function might bid 0.9 * 18 = 16.2.
-                # But since opponents are weak, we can win this for much less.
-                # CAP the bid to save budget for later.
-                final_bid = min(base_bid, 11.5)
+
         
         # 5. Final Safety Check
         return float(max(0.0, min(final_bid, self.budget)))
