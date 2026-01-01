@@ -67,6 +67,9 @@ class BiddingAgent:
         self.high_competition_count = 0  # Count of items sold for > 10
         self.likely_high_items_total = 6 # From game rules
         self.price_history = []
+
+        self.HIGH_VALUE_THRESHOLD = 12.0
+        self.LOW_VALUE_THRESHOLD = 8.0
         
         # TODO: Add your custom state variables here
         # Examples:
@@ -173,8 +176,8 @@ class BiddingAgent:
             max_price = np.max(self.observed_prices)
         else:
             # No data yet, be conservative
-            avg_price = 5.0
-            max_price = 10.0
+            avg_price = np.mean([self.LOW_VALUE_THRESHOLD, self.HIGH_VALUE_THRESHOLD])
+            max_price = self.HIGH_VALUE_THRESHOLD
         
         # Rounds remaining
         total_rounds = 15  # Always 15 rounds per game
@@ -184,10 +187,10 @@ class BiddingAgent:
             return 0
         
         # Classify item value
-        if valuation > max_price:
+        if valuation > max(max_price, self.HIGH_VALUE_THRESHOLD):
             # High value item - bid aggressively
             bid_fraction = 0.9
-        elif valuation > avg_price:
+        elif valuation > max(avg_price, self.LOW_VALUE_THRESHOLD):
             # Medium value item - bid moderately
             bid_fraction = 0.7
         else:
@@ -245,7 +248,8 @@ class BiddingAgent:
         # 3. GET BASELINE STRATEGY
         # Use your existing function to get a market-aware bid.
         # This handles the shading (0.9/0.7/0.5) and the 50% budget safety cap.
-        base_bid = self._history_based_bidding(item_id, my_valuation)
+        history_bid = self._history_based_bidding(item_id, my_valuation)
+        strategic_bid = self.strategic_bidding_function(item_id, my_valuation)
         
         # 4. APPLY CATEGORY INTELLIGENCE (The "Kicker")
         # Check if we can improve upon the base_bid using distribution knowledge.
@@ -256,11 +260,10 @@ class BiddingAgent:
         # We assume items sold > 9.5 were "Global Highs"
         competitive_items_left = max(0, self.likely_high_items_total - self.high_competition_count)
         
-        final_bid = base_bid
-        
+        base_bid = np.mean([history_bid, strategic_bid])
+        risk_adjustment = 1.0 + (self.rounds_completed / self.total_rounds) * 0.05
+        final_bid = base_bid * risk_adjustment
 
-        
-        # 5. Final Safety Check
         return float(max(0.0, min(final_bid, self.budget)))
     
     # def bidding_function(self, item_id: str) -> float:
