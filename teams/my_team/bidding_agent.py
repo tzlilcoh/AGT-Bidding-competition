@@ -18,6 +18,7 @@ Key Features:
 """
 
 from typing import Dict, List
+import numpy as np
 
 
 class BiddingAgent:
@@ -60,6 +61,11 @@ class BiddingAgent:
         # Game state tracking
         self.rounds_completed = 0
         self.total_rounds = 15  # Always 15 rounds per game
+        self.observed_prices = []
+        self.opponent_wins = {}
+
+        self.high_competition_count = 0  # Count of items sold for > 10
+        self.likely_high_items_total = 6 # From game rules
         
         # TODO: Add your custom state variables here
         # Examples:
@@ -76,6 +82,18 @@ class BiddingAgent:
         # self.max_valuation = max(valuation_vector.values())
         # self.min_valuation = min(valuation_vector.values())
     
+    def _oponent_tracking(self, winning_team: str, price_paid: float):
+        """
+        Track opponent behavior
+        """
+        if winning_team and price_paid > 0:
+            self.observed_prices.append(price_paid)
+            self.opponent_wins[winning_team] = self.opponent_wins.get(winning_team, 0) + 1
+        if price_paid > 9.5: # Threshold slightly below 10 to be safe
+            self.high_competition_count += 1
+            
+        return True
+
     def _update_available_budget(self, item_id: str, winning_team: str, 
                                  price_paid: float):
         """
@@ -90,6 +108,7 @@ class BiddingAgent:
         if winning_team == self.team_id:
             self.budget -= price_paid
             self.items_won.append(item_id)
+
     
     def update_after_each_round(self, item_id: str, winning_team: str, 
                                 price_paid: float):
@@ -121,7 +140,7 @@ class BiddingAgent:
             self.utility += (self.valuation_vector[item_id] - price_paid)
         
         self.rounds_completed += 1
-        
+        self._oponent_tracking(winning_team, price_paid)
         # TODO: Implement your learning/adaptation logic here
         # Examples:
         
@@ -145,93 +164,179 @@ class BiddingAgent:
         #     pass
         
         return True
-    
+
+    def strategic_bidding_function(self, item_id: str, valuation: float) -> float:
+        if self.observed_prices:
+            avg_price = np.mean(self.observed_prices)
+            max_price = np.max(self.observed_prices)
+        else:
+            # No data yet, be conservative
+            avg_price = 5.0
+            max_price = 10.0
+        
+        # Rounds remaining
+        total_rounds = 15  # Always 15 rounds per game
+        rounds_remaining = total_rounds - self.rounds_completed
+        
+        if rounds_remaining == 0:
+            return 0
+        
+        # Classify item value
+        if valuation > max_price:
+            # High value item - bid aggressively
+            bid_fraction = 0.9
+        elif valuation > avg_price:
+            # Medium value item - bid moderately
+            bid_fraction = 0.7
+        else:
+            # Low value item - bid conservatively
+            bid_fraction = 0.5
+        
+        # Calculate bid
+        bid = valuation * bid_fraction
+        
+        # Don't exceed budget
+        bid = min(bid, self.budget)
+        
+        # Reserve some budget for future rounds (unless near end)
+        if rounds_remaining > 3:
+            max_bid_this_round = self.budget * 0.5
+            bid = min(bid, max_bid_this_round)
+        
+        return max(0, bid)
+
     def bidding_function(self, item_id: str) -> float:
         """
-        MAIN METHOD: Decide how much to bid for the current item.
-        This is called once per auction round.
-        
-        Args:
-            item_id: The item being auctioned (e.g., "item_7")
-        
-        Returns:
-            float: Your bid amount
-                - Must be >= 0
-                - Should be <= your current budget
-                - Bids over budget are automatically capped
-                - Return 0 to not bid
-        
-        Important:
-            - You have 2 seconds maximum to return
-            - Timeout or error = bid of 0
-            - This is a SECOND-PRICE auction: winner pays second-highest bid
-            - Budget does NOT carry over between games
-        
-        Strategy Considerations:
-            1. Budget Management: How much to spend now vs save for later?
-            2. Item Value: Is this item worth competing for?
-            3. Competition: How competitive will this auction be?
-            4. Game Progress: Are we early or late in the game?
+        HYBRID STRATEGY: Strategic Market Awareness + Category Counting
         """
-        # Get your valuation for this item
+        # 1. Setup
         my_valuation = self.valuation_vector.get(item_id, 0)
-        
-        # Early exit if no value or no budget
-        if my_valuation <= 0 or self.budget <= 0:
-            return 0.0
-        
-        # Calculate rounds remaining
         rounds_remaining = self.total_rounds - self.rounds_completed
-        if rounds_remaining <= 0:
+        
+        # Early exit
+        if my_valuation <= 0 or self.budget <= 0.05 or rounds_remaining == 0:
             return 0.0
+            
+        # 2. END GAME OVERRIDE (Priority #1)
+        # If in the last 3 rounds, forget strategy. Bid Truthfully to empty budget.
+        if rounds_remaining <= 3:
+            return float(min(my_valuation, self.budget))
+
+        # 3. GET BASELINE STRATEGY
+        # Use your existing function to get a market-aware bid.
+        # This handles the shading (0.9/0.7/0.5) and the 50% budget safety cap.
+        base_bid = self.strategic_bidding_function(item_id, my_valuation)
         
-        # ============================================================
-        # TODO: IMPLEMENT YOUR BIDDING STRATEGY HERE
-        # ============================================================
+        # 4. APPLY CATEGORY INTELLIGENCE (The "Kicker")
+        # Check if we can improve upon the base_bid using distribution knowledge.
         
-        # Example Strategy 1: Simple Truthful Bidding
-        # bid = my_valuation
+        is_high_value = (my_valuation > 11.0)
         
-        # Example Strategy 2: Budget Pacing
-        # budget_per_round = self.budget / rounds_remaining
-        # bid = min(my_valuation, budget_per_round * 1.5)
+        # Estimate "Global High" items remaining (Total 6 in the deck)
+        # We assume items sold > 9.5 were "Global Highs"
+        competitive_items_left = max(0, self.likely_high_items_total - self.high_competition_count)
         
-        # Example Strategy 3: Value-Based Shading
-        # if my_valuation > 12:
-        #     bid = my_valuation * 0.9  # High value: bid aggressively
-        # elif my_valuation > 8:
-        #     bid = my_valuation * 0.7  # Medium value: bid moderately
-        # else:
-        #     bid = my_valuation * 0.5  # Low value: bid conservatively
+        final_bid = base_bid
         
-        # Example Strategy 4: Adaptive Based on Observations
-        # if hasattr(self, 'price_history') and self.price_history:
-        #     avg_price = sum(self.price_history) / len(self.price_history)
-        #     if my_valuation > avg_price * 1.2:
-        #         bid = my_valuation * 0.85  # Competitive item
-        #     else:
-        #         bid = my_valuation * 0.6   # Less competitive
-        # else:
-        #     bid = my_valuation * 0.7
+        if is_high_value:
+            if competitive_items_left > 1:
+                # SCENARIO A: GLOBAL HIGH (Danger)
+                # This is likely a "High-for-Everyone" item.
+                # Your strategic function caps bids at 50% budget. This is risky here!
+                # We need to OVERRIDE the cap and bid Truthfully to ensure we win (or tax).
+                final_bid = my_valuation 
+                
+            else:
+                # SCENARIO B: LOCAL HIGH (Opportunity)
+                # The "Global Highs" are mostly gone. This is a "Lucky High" for me.
+                # Your strategic function might bid 0.9 * 18 = 16.2.
+                # But since opponents are weak, we can win this for much less.
+                # CAP the bid to save budget for later.
+                final_bid = min(base_bid, 11.5)
         
-        # Example Strategy 5: End-Game Aggression
-        # progress = self.rounds_completed / self.total_rounds
-        # if progress > 0.7:  # Last 30% of game
-        #     bid = my_valuation * 0.9  # More aggressive
-        # else:
-        #     bid = my_valuation * 0.7
+        # 5. Final Safety Check
+        return float(max(0.0, min(final_bid, self.budget)))
+    
+    # def bidding_function(self, item_id: str) -> float:
+    #     """
+    #     MAIN METHOD: Decide how much to bid for the current item.
+    #     This is called once per auction round.
         
-        # PLACEHOLDER: Simple truthful bidding (REPLACE THIS!)
-        bid = my_valuation * 0.8  # Bid 80% of valuation
+    #     Args:
+    #         item_id: The item being auctioned (e.g., "item_7")
         
-        # ============================================================
-        # END OF STRATEGY IMPLEMENTATION
-        # ============================================================
+    #     Returns:
+    #         float: Your bid amount
+    #             - Must be >= 0
+    #             - Should be <= your current budget
+    #             - Bids over budget are automatically capped
+    #             - Return 0 to not bid
         
-        # Ensure bid is valid (non-negative and within budget)
-        bid = max(0.0, min(bid, self.budget))
+    #     Important:
+    #         - You have 2 seconds maximum to return
+    #         - Timeout or error = bid of 0
+    #         - This is a SECOND-PRICE auction: winner pays second-highest bid
+    #         - Budget does NOT carry over between games
         
-        return float(bid)
+    #     Strategy Considerations:
+    #         1. Budget Management: How much to spend now vs save for later?
+    #         2. Item Value: Is this item worth competing for?
+    #         3. Competition: How competitive will this auction be?
+    #         4. Game Progress: Are we early or late in the game?
+    #     """
+    #     # Get your valuation for this item
+    #     my_valuation = self.valuation_vector.get(item_id, 0)
+        
+    #     # Early exit if no value or no budget
+    #     if my_valuation <= 0 or self.budget <= 0:
+    #         return 0.0
+        
+    #     # Calculate rounds remaining
+    #     rounds_remaining = self.total_rounds - self.rounds_completed
+    #     if rounds_remaining <= 0:
+    #         return 0.0
+        
+    #     # ============================================================
+    #     # TODO: IMPLEMENT YOUR BIDDING STRATEGY HERE
+    #     # ============================================================
+    #     bid = self.strategic_bidding_function(item_id, my_valuation)
+        
+    #     # Example Strategy 1: Simple Truthful Bidding
+    #     # bid = my_valuation
+        
+    #     # Example Strategy 2: Budget Pacing
+    #     # budget_per_round = self.budget / rounds_remaining
+    #     # bid = min(my_valuation, budget_per_round * 1.5)
+        
+        
+    #     # Example Strategy 4: Adaptive Based on Observations
+    #     # if hasattr(self, 'price_history') and self.price_history:
+    #     #     avg_price = sum(self.price_history) / len(self.price_history)
+    #     #     if my_valuation > avg_price * 1.2:
+    #     #         bid = my_valuation * 0.85  # Competitive item
+    #     #     else:
+    #     #         bid = my_valuation * 0.6   # Less competitive
+    #     # else:
+    #     #     bid = my_valuation * 0.7
+        
+    #     # Example Strategy 5: End-Game Aggression
+    #     # progress = self.rounds_completed / self.total_rounds
+    #     # if progress > 0.7:  # Last 30% of game
+    #     #     bid = my_valuation * 0.9  # More aggressive
+    #     # else:
+    #     #     bid = my_valuation * 0.7
+        
+    #     # PLACEHOLDER: Simple truthful bidding (REPLACE THIS!)
+    #     # bid = my_valuation * 0.8  # Bid 80% of valuation
+        
+    #     # ============================================================
+    #     # END OF STRATEGY IMPLEMENTATION
+    #     # ============================================================
+        
+    #     # Ensure bid is valid (non-negative and within budget)
+    #     bid = max(0.0, min(bid, self.budget))
+        
+    #     return float(bid)
     
     # ================================================================
     # OPTIONAL: Helper methods for your strategy
