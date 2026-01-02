@@ -1,11 +1,31 @@
+"""
+AGT Competition - Student Agent Template
+========================================
+
+Team Name: My Team
+Members: 
+  - Roy Lapardon 315216564
+  - Tzlil Cohen
+  - 
+
+Strategy Description:
+Bayesian Opportunity Hunter with End-Game Spending
+
+Key Features:
+- Bayesian inference to classify items as High/Mixed/Low categories
+- Opportunity detection: bid truthfully on Mixed items where I have high value
+- Conservative on High category items (fierce competition)
+- End-game spending boost to avoid leaving money on the table
+- Updates category beliefs after each round using observed prices
+"""
+
+
 class BiddingAgent:
     def __init__(self, team_id, valuation_vector, budget, opponent_teams):
         self.team_id = team_id
         self.valuation_vector = valuation_vector
         self.budget = budget
-        
-        # --- BAYESIAN STATE TRACKING ---
-        # Initial counts from Student Guide
+        self.items_won = []
         self.counts = {
             "High": 6,
             "Low": 4,
@@ -13,137 +33,127 @@ class BiddingAgent:
         }
         self.total_items_remaining = 20
         self.rounds_completed = 0
-        self.total_rounds = 15  # Always 15 rounds per game
+        self.total_rounds = 15
 
-    def get_likelihood(self, valuation, category):
+    def get_likelihood(self, valuation: float, category: str) -> float:
         """Returns P(valuation | category) based on Uniform distributions"""
         if category == "High":
-            # U[10, 20] -> Range is 10
             return 0.1 if 10 <= valuation <= 20 else 0.0
         elif category == "Low":
-            # U[1, 10] -> Range is 9
-            return 0.111 if 1 <= valuation < 10 else 0.0
-        elif category == "Mixed":
-            # U[1, 20] -> Range is 19
-            return 0.0526 if 1 <= valuation <= 20 else 0.0
-        return 0.0
+            return 0.1 if 1 <= valuation <= 10 else 0.0
+        else:
+            return 0.05 if 1 <= valuation <= 20 else 0.0
 
-    def calculate_probabilities(self, my_valuation):
-        """Calculates P(Category | MyValuation)"""
+    def calculate_probabilities(self, my_valuation: float) -> dict:
+        """Calculates P(Category | MyValuation) using Bayes' theorem"""
         if self.total_items_remaining == 0:
             return {"High": 0, "Mixed": 0, "Low": 0}
 
         priors = {
-            k: v / self.total_items_remaining 
-            for k, v in self.counts.items()
+            category: count / self.total_items_remaining 
+            for category, count in self.counts.items()
         }
         
-        # Calculate unnormalized posteriors: Prior * Likelihood
         posteriors = {}
         total_evidence = 0
         
-        for cat in ["High", "Low", "Mixed"]:
-            likelihood = self.get_likelihood(my_valuation, cat)
-            unnormalized = likelihood * priors[cat]
-            posteriors[cat] = unnormalized
+        for category in ["High", "Low", "Mixed"]:
+            likelihood = self.get_likelihood(my_valuation, category)
+            unnormalized = likelihood * priors[category]
+            posteriors[category] = unnormalized
             total_evidence += unnormalized
             
-        # Normalize so they sum to 1
         if total_evidence > 0:
-            for cat in posteriors:
-                posteriors[cat] /= total_evidence
-        else:
-            # Fallback if valuation is outside expected bounds (e.g. 20.1)
-            return priors
+            for category in posteriors:
+                posteriors[category] /= total_evidence
             
         return posteriors
 
     def _update_available_budget(self, item_id: str, winning_team: str, 
                                  price_paid: float):
-        """
-        Internal method to update budget after auction.
-        DO NOT MODIFY - This is called automatically by the system.
-        
-        Args:
-            item_id: ID of the auctioned item
-            winning_team: ID of the winning team
-            price_paid: Price paid by winner
-        """
         if winning_team == self.team_id:
             self.budget -= price_paid
-            # self.items_won.append(item_id)
+            self.items_won.append(item_id)
 
-    def update_after_each_round(self, item_id, winning_team, price_paid):
+    def update_after_each_round(self, item_id: str, winning_team: str, price_paid: float) -> bool:
         self._update_available_budget(item_id, winning_team, price_paid)
         self.rounds_completed += 1
-        # --- UPDATE PRIORS BASED ON OBSERVATION ---
-        # We must guess what category the PREVIOUS item was to update counts.
-        # This is where we use the price_paid as a signal.
         
-        guessed_category = "Mixed" # Default guess
-        if price_paid > 10:
-            if self.valuation_vector[item_id] < 10:
-                if self.counts["Mixed"] <= 0:
-                    self.counts["Low"] -= 1
-                    self.counts["Mixed"] = 0
-                else:
-                    self.counts["Mixed"] -= 1
-                self.total_items_remaining -= 1
-                return True
-        if price_paid > 11.0:
-            # Very likely a High category item where competition drove price up
-            if self.counts["High"] > 0:
-                guessed_category = "High"
-        elif price_paid < 8.0:
-             # Likely a Low category
-             if self.counts["Low"] > 0:
-                guessed_category = "Low"
+        my_val = self.valuation_vector[item_id]
+        priors = self.calculate_probabilities(my_val)
+
+        def price_likelihood(price, category):
+            if category == "High":
+                # High category: everyone bids high, so prices tend to be 8-20
+                if 8 <= price <= 20:
+                    return 0.9
+                return 0.1
+            elif category == "Low":
+                # Low category: everyone bids low, so prices tend to be 0-8
+                if price <= 8:
+                    return 0.9
+                return 0.2
+            return 0.5
         
-        # Decrement the count for the guessed category
+        # Compute posterior: P(category | my_val, price_paid)
+        posteriors = {}
+        total = 0
+        for category in ["High", "Low", "Mixed"]:
+            likelihood = price_likelihood(price_paid, category)
+            posterior = priors[category] * likelihood
+            posteriors[category] = posterior
+            total += posterior
+        
+        if total > 0:
+            for category in posteriors:
+                posteriors[category] /= total
+        
+        # Update counts based on most likely category
+        guessed_category = max(posteriors, key=posteriors.get)
+        
         if self.counts[guessed_category] > 0:
             self.counts[guessed_category] -= 1
-            
+        else:
+            for category in sorted(posteriors.keys(), key=posteriors.get, reverse=True):
+                if self.counts[category] > 0:
+                    self.counts[category] -= 1
+                    break
+        
         self.total_items_remaining -= 1
         return True
 
-    def _calculate_risk_adjustment(self):
-        progress = self.rounds_completed / self.total_rounds
-        if progress < 0.33:
-            risk_adjustment = 0.05
-        elif progress < 0.67:
-            risk_adjustment = 0.1
-        else:
-            risk_adjustment = 0.15
-        return 0.85 + risk_adjustment
-
     def bidding_function(self, item_id):
-        my_val = self.valuation_vector[item_id]
         my_valuation = self.valuation_vector.get(item_id, 0)
+        if my_valuation <= 0 or self.budget <= 0.05:
+            return 0.0
+
+        probs = self.calculate_probabilities(my_valuation)
+        prob_mixed = probs["Mixed"]
+        prob_high = probs["High"]
+        
         rounds_remaining = self.total_rounds - self.rounds_completed
         
-        # Early exit
-        if my_valuation <= 0 or self.budget <= 0.05 or rounds_remaining == 0:
-            return 0.0
-        # Get Bayesian Probabilities
-        probs = self.calculate_probabilities(my_val)
-        prob_high_competition = probs["High"]
-        prob_mixed = probs["Mixed"]
+        # DECISION LOGIC:
+        # 1. OPPORTUNITY: Mixed + high personal value = I got lucky!
+        if prob_mixed > 0.5 and my_valuation >= 12:
+            shading = 1.0  # Bid truthfully to secure the win!
         
-        risk_adjustment = self._calculate_risk_adjustment()
-        # --- STRATEGY: ADAPT SHADING ---
-        # If I am 90% sure this is a "High" item (Common Value), 
-        # I must bid truthfully because opponents also value it highly.
-        # If I think it's "Mixed", I can shade (bid 70%) to save money.
+        # 2. FIERCE COMPETITION: Likely High category
+        elif prob_high > 0.5:
+            shading = 0.92
         
-        base_shading = 0.7  # Default aggressive shading
+        # 3. DEFAULT
+        else:
+            shading = 0.96
         
-        # As probability of High Competition goes up, shading approaches 1.0 (Truthful)
-        # Formula: 0.7 + (0.3 * P(High))
+        bid = my_valuation * shading
         
-
-        adaptive_shading = base_shading + (0.3 * prob_high_competition)
-        if prob_high_competition < 0.5 and prob_mixed > 0:
-            adaptive_shading = 0.99
-        bid = my_val * adaptive_shading * risk_adjustment
+        # END-GAME SPENDING BOOST
+        if rounds_remaining <= 3:
+            if my_valuation >= 10:
+                bid = max(bid, my_valuation * 0.98)
+            
+            if rounds_remaining == 1 and my_valuation >= 8:
+                bid = max(bid, min(self.budget, my_valuation))
         
-        return float(max(0.0, min(bid, self.budget)))
+        return float(max(0.0, min(bid, self.budget, my_valuation)))
