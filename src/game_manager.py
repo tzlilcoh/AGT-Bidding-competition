@@ -64,6 +64,7 @@ class GameManager:
         self.items_won = {}
         self.auction_log = []
         self.auction_sequence = []
+        self.item_categories = {}  # Store item -> category mapping
     
     def initialize_game(self, team_agents: Dict[str, str]) -> bool:
         """
@@ -88,6 +89,15 @@ class GameManager:
                 self.valuations, item_categories = self.valuation_generator.generate_arena_valuations(team_ids)
                 logger.info(f"Generated valuations for {len(team_ids)} teams")
                 logger.debug(f"Item categories: High={item_categories[0]}, Low={item_categories[1]}, Mixed={item_categories[2]}")
+                
+                # Build item -> category mapping for verbose output
+                high_items, low_items, mixed_items = item_categories
+                for item_id in high_items:
+                    self.item_categories[item_id] = "HIGH"
+                for item_id in low_items:
+                    self.item_categories[item_id] = "LOW"
+                for item_id in mixed_items:
+                    self.item_categories[item_id] = "MIXED"
             
             # Generate auction sequence
             self.auction_sequence = self.valuation_generator.get_random_auction_sequence(T_AUCTION_ROUNDS)
@@ -135,7 +145,84 @@ class GameManager:
         Returns:
             AuctionRoundResult with complete round information
         """
-        logger.info(f"=== Round {round_number}/{T_AUCTION_ROUNDS}: Item {item_id} ===")
+        # Get item category for verbose output
+        category = self.item_categories.get(item_id, "UNKNOWN")
+        
+        logger.info(f"")
+        logger.info(f"{'='*60}")
+        logger.info(f"ROUND {round_number}/{T_AUCTION_ROUNDS}: {item_id} | Category: {category}")
+        logger.info(f"{'='*60}")
+        
+        # Log each team's valuation for this item
+        logger.info(f"Team Valuations for {item_id}:")
+        for team_id in sorted(self.agents.keys()):
+            val = self.valuations[team_id].get(item_id, 0)
+            budget = self.budgets[team_id]
+            logger.info(f"  {team_id:20s} → Value: {val:6.2f} | Budget: {budget:6.2f}")
+        
+        # Show your_agent's classification by creating a temp instance
+        if 'your_agent' in self.agents:
+            try:
+                # Get agent metadata to create temp instance
+                metadata = self.agent_manager.agent_metadata.get('your_agent')
+                agent_state = self.agent_manager.agent_states.get('your_agent')
+                
+                if metadata:
+                    import importlib.util
+                    spec = importlib.util.spec_from_file_location("temp_agent", metadata['file_path'])
+                    if spec and spec.loader:
+                        module = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(module)
+                        
+                        if hasattr(module, 'BiddingAgent'):
+                            # Create temp agent
+                            temp_agent = module.BiddingAgent(
+                                metadata['team_id'],
+                                metadata['valuation_vector'],
+                                metadata['budget'],
+                                metadata['opponent_teams']
+                            )
+                            
+                            # Restore state if available
+                            if agent_state:
+                                for key, value in agent_state.items():
+                                    setattr(temp_agent, key, value)
+                            
+                            # Now call calculate_probabilities
+                            if hasattr(temp_agent, 'calculate_probabilities'):
+                                my_val = self.valuations['your_agent'].get(item_id, 0)
+                                probs = temp_agent.calculate_probabilities(my_val)
+                                
+                                # Extract probabilities (handle enum keys)
+                                p_high = p_mixed = p_low = 0
+                                for key, val in probs.items():
+                                    key_str = str(key).upper()
+                                    if 'HIGH' in key_str:
+                                        p_high = val
+                                    elif 'MIXED' in key_str:
+                                        p_mixed = val
+                                    elif 'LOW' in key_str:
+                                        p_low = val
+                                
+                                # Determine predicted category
+                                if p_mixed > p_high and p_mixed > p_low:
+                                    predicted = "MIXED"
+                                elif p_high > p_mixed and p_high > p_low:
+                                    predicted = "HIGH"
+                                else:
+                                    predicted = "LOW"
+                                
+                                # Check if prediction matches reality
+                                match_symbol = "✅" if predicted == category else "❌"
+                                
+                                logger.info(f"-" * 60)
+                                logger.info(f"🔮 YOUR_AGENT Classification:")
+                                logger.info(f"   P(HIGH)={p_high:.2%} | P(MIXED)={p_mixed:.2%} | P(LOW)={p_low:.2%}")
+                                logger.info(f"   Predicted: {predicted} | Actual: {category} {match_symbol}")
+            except Exception as e:
+                logger.debug(f"Could not get agent classification: {e}")
+        
+        logger.info(f"-" * 60)
         
         # Collect bids from all agents
         bids = {}
@@ -148,8 +235,14 @@ class GameManager:
             
             if error:
                 logger.warning(f"Team {team_id} bid error: {error}")
-            
-            logger.debug(f"Team {team_id}: Bid={bid:.2f}, Budget={self.budgets[team_id]:.2f}, Time={exec_time:.3f}s")
+        
+        # Log all bids in a clear format
+        logger.info(f"Bids Submitted:")
+        for team_id in sorted(bids.keys()):
+            bid = bids[team_id]
+            val = self.valuations[team_id].get(item_id, 0)
+            shade_pct = (bid / val * 100) if val > 0 else 0
+            logger.info(f"  {team_id:20s} → Bid: {bid:6.2f} ({shade_pct:5.1f}% of value)")
         
         # Execute auction
         round_result = self.auction_engine.execute_round(
@@ -161,6 +254,7 @@ class GameManager:
         )
         
         # Update game state
+        logger.info(f"-" * 60)
         if round_result.winner_id:
             winner_id = round_result.winner_id
             price = round_result.price_paid
@@ -171,9 +265,15 @@ class GameManager:
             # Track items won
             self.items_won[winner_id].append(item_id)
             
-            logger.info(f"Winner: {winner_id}, Price: {price:.2f}, Remaining budget: {self.budgets[winner_id]:.2f}")
+            # Calculate winner's profit
+            winner_val = self.valuations[winner_id].get(item_id, 0)
+            profit = winner_val - price
+            
+            logger.info(f"🏆 WINNER: {winner_id}")
+            logger.info(f"   Value: {winner_val:.2f} | Paid: {price:.2f} | Profit: {profit:+.2f}")
+            logger.info(f"   Remaining Budget: {self.budgets[winner_id]:.2f}")
         else:
-            logger.info("No winner this round")
+            logger.info("❌ No winner this round (all bids were 0 or invalid)")
         
         # Update all agents with round results
         for team_id, agent in self.agents.items():
