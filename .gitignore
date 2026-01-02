@@ -27,6 +27,7 @@ venv/
 ENV/
 env/
 .venv
+game_theory_agt_env/
 
 # IDE
 .vscode/
